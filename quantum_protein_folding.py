@@ -165,6 +165,9 @@ class HybridQuantumFolder:
         # Build cost Hamiltonian
         self.cost_hamiltonian = self._build_cost_hamiltonian()
         
+        # Create QNode for cost function
+        self._cost_qnode = qml.QNode(self._cost_circuit, self.dev, interface='autograd')
+        
     def _build_cost_hamiltonian(self) -> qml.Hamiltonian:
         """Build cost Hamiltonian encoding HP energy function."""
         coeffs = []
@@ -263,12 +266,15 @@ class HybridQuantumFolder:
                 for i in range(len(wires)):
                     qml.CNOT(wires=[wires[i], wires[(i+1) % len(wires)]])
     
-    @qml.qnode(device=dev, interface='autograd')
-    def cost_function(self, params: np.ndarray) -> float:
-        """Quantum cost function returning expectation of cost Hamiltonian."""
+    def _cost_circuit(self, params: np.ndarray) -> float:
+        """Internal circuit for cost function QNode."""
         wires = list(range(self.n_qubits))
         self.hybrid_ansatz(params, wires)
         return qml.expval(self.cost_hamiltonian)
+    
+    def cost_function(self, params: np.ndarray) -> float:
+        """Quantum cost function returning expectation of cost Hamiltonian."""
+        return self._cost_qnode(params)
     
     def optimize(self, 
                  n_iterations: int = 100,
@@ -304,14 +310,9 @@ class HybridQuantumFolder:
         
         total_time = time.time() - start_time
         
-        # Get final samples
-        @qml.qnode(self.dev, interface='autograd')
-        def sample_circuit(params):
-            wires = list(range(self.n_qubits))
-            self.hybrid_ansatz(params, wires)
-            return qml.sample()
-        
-        samples = sample_circuit(params)
+        # Get final samples using a separate QNode
+        sample_qnode = qml.QNode(self._sample_circuit, self.dev, interface='autograd')
+        samples = sample_qnode(params)
         
         # Decode samples and find best configuration
         best_energy = float('inf')
@@ -334,6 +335,12 @@ class HybridQuantumFolder:
             'optimization_time': total_time,
             'n_iterations': n_iterations
         }
+    
+    def _sample_circuit(self, params: np.ndarray):
+        """Internal circuit for sampling."""
+        wires = list(range(self.n_qubits))
+        self.hybrid_ansatz(params, wires)
+        return qml.sample()
 
 
 class EnsembleFolder:
